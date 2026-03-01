@@ -178,9 +178,8 @@ impl Render for SyncingPage {
             }))
             .child(h_flex()
                 .w_full()
-                .max_w_128()
                 .gap_2()
-                .child(Input::new(&self.custom_input_state).w_full())
+                .child(Input::new(&self.custom_input_state).max_w_128())
                 .child(Button::new("custom_file").label(ts!("instance.sync.sync_file")).on_click(cx.listener(|page, _, _, cx| {
                     let input = page.custom_input_state.read(cx).value();
                     let input = input.as_str().trim_ascii();
