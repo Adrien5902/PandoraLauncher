@@ -238,8 +238,6 @@ impl LauncherUI {
     }
 
     pub fn switch_page(&mut self, page: PageType, page_path: &[PageType], window: &mut Window, cx: &mut Context<Self>) {
-        dbg!(&page, page_path);
-
         if InterfaceConfig::get(cx).main_page == page {
             return;
         }
