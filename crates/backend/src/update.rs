@@ -296,69 +296,71 @@ fn move_new_exe_into(old_exe_path: PathBuf, new_exe_path: PathBuf, new_exe_data:
 
     if let Err(err) = std::fs::rename(&new_exe_data, &new_exe_path) {
         if err.kind() == std::io::ErrorKind::PermissionDenied {
-            // Runas doesn't support gui elevation on linux, so we just show an error
-            #[cfg(target_os = "linux")]
-            return Err("Unable to update executable file: permission denied".into());
-            #[cfg(not(target_os = "linux"))]
-            {
-                #[cfg(unix)]
-                let result = {
-                    let mut command = OsString::new();
-                    command.push("mv -f '");
-                    command.push(new_exe_data.as_os_str());
-                    command.push("' '");
-                    command.push(new_exe_path.as_os_str());
-                    command.push("' && chmod +x '");
-                    command.push(new_exe_path.as_os_str());
+            log::info!("Permission denied while trying to update executable, need to elevate");
 
-                    if old_exe_path == new_exe_path {
-                        command.push("'");
-                    } else {
-                        command.push("' && rm -f '");
-                        command.push(old_exe_path.as_os_str());
-                        command.push("'");
-                    }
+            #[cfg(unix)]
+            let result = {
+                let mut command = OsString::new();
+                command.push("mv -f '");
+                command.push(new_exe_data.as_os_str());
+                command.push("' '");
+                command.push(new_exe_path.as_os_str());
+                command.push("' && chmod +x '");
+                command.push(new_exe_path.as_os_str());
 
-                    runas::Command::new("sh").arg("-c").arg(command).gui(true).status()
-                };
-                #[cfg(target_os = "windows")]
-                let result = {
-                    let mut command = OsString::new();
-                    command.push("Move-Item -Path '");
-                    command.push(new_exe_data.as_os_str());
-                    command.push("' -Destination '");
-                    command.push(new_exe_path.as_os_str());
-
-                    if old_exe_path == new_exe_path {
-                        command.push("' -Force");
-                    } else {
-                        command.push("' -Force; if ($?) { Remove-Item -Path '");
-                        command.push(old_exe_path.as_os_str());
-                        command.push("' }");
-                    }
-
-                    log::info!("{}", command.to_string_lossy());
-
-                    runas::Command::new("powershell.exe")
-                        .arg("-Command")
-                        .arg(command)
-                        .gui(true)
-                        .status()
-                };
-
-                match result {
-                    Ok(status) if status.success() => {
-                        return Ok(())
-                    },
-                    Ok(status) => {
-                        log::error!("Error completing elevated executable install: {}", status);
-                        return Err("Error completing elevated executable installation, see logs for more details".into());
-                    },
-                    Err(err) => {
-                        log::error!("Error completing elevated executable install: {}", err);
-                        return Err("Error completing elevated executable installation, see logs for more details".into());
-                    },
+                if old_exe_path == new_exe_path {
+                    command.push("'");
+                } else {
+                    command.push("' && rm -f '");
+                    command.push(old_exe_path.as_os_str());
+                    command.push("'");
                 }
+
+                if cfg!(target_os = "linux") {
+                    log::info!("Running with pkexec: {}", command.to_string_lossy());
+                    std::process::Command::new("pkexec").arg("sh").arg("-c").arg(command).status()
+                } else {
+                    log::info!("Running with runas: {}", command.to_string_lossy());
+                    runas::Command::new("sh").arg("-c").arg(command).gui(true).status()
+                }
+            };
+            #[cfg(target_os = "windows")]
+            let result = {
+                let mut command = OsString::new();
+                command.push("Move-Item -Path '");
+                command.push(new_exe_data.as_os_str());
+                command.push("' -Destination '");
+                command.push(new_exe_path.as_os_str());
+
+                if old_exe_path == new_exe_path {
+                    command.push("' -Force");
+                } else {
+                    command.push("' -Force; if ($?) { Remove-Item -Path '");
+                    command.push(old_exe_path.as_os_str());
+                    command.push("' }");
+                }
+
+                log::info!("Running with powershell.exe: {}", command.to_string_lossy());
+
+                runas::Command::new("powershell.exe")
+                    .arg("-Command")
+                    .arg(command)
+                    .gui(true)
+                    .status()
+            };
+
+            match result {
+                Ok(status) if status.success() => {
+                    return Ok(())
+                },
+                Ok(status) => {
+                    log::error!("Error completing elevated executable install: {}", status);
+                    return Err("Error completing elevated executable installation, see logs for more details".into());
+                },
+                Err(err) => {
+                    log::error!("Error completing elevated executable install: {}", err);
+                    return Err("Error completing elevated executable installation, see logs for more details".into());
+                },
             }
         }
 
