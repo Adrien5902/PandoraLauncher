@@ -144,7 +144,23 @@ pub fn start(
         cx.on_window_closed({
             let main_window_hidden = main_window_hidden.clone();
             move |cx| {
-                if cx.windows().is_empty() && !main_window_hidden.load(std::sync::atomic::Ordering::SeqCst) {
+                if main_window_hidden.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+
+                let config = InterfaceConfig::get(cx);
+                if config.quit_on_main_closed {
+                    for window in cx.windows() {
+                        let is_main = window.read(cx, |window: Entity<Root>, cx| {
+                            window.read(cx).view().clone().downcast::<LauncherRoot>().is_ok()
+                        }).unwrap_or(false);
+                        if is_main {
+                            return;
+                        }
+                    }
+
+                    cx.quit();
+                } else if cx.windows().is_empty() {
                     cx.quit();
                 }
             }
