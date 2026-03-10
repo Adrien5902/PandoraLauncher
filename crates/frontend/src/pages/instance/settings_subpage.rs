@@ -77,6 +77,7 @@ impl InstanceSettingsSubpage {
     ) -> Self {
         let entry = instance.read(cx);
         let instance_id = entry.id;
+        let instance_name = entry.name.clone();
         let loader = entry.configuration.loader;
         let preferred_loader_version = entry.configuration.preferred_loader_version.map(|s| s.as_str()).unwrap_or("Latest");
         let disable_file_syncing = entry.configuration.disable_file_syncing;
@@ -94,7 +95,9 @@ impl InstanceSettingsSubpage {
         let glfw_path = system_libraries.glfw.get_or_auto(&*AUTO_LIBRARY_PATH_GLFW);
         let openal_path = system_libraries.openal.get_or_auto(&*AUTO_LIBRARY_PATH_OPENAL);
 
-        let new_name_input_state = cx.new(|cx| InputState::new(window, cx));
+        let new_name_input_state = cx.new(|cx| {
+            InputState::new(window, cx).default_value(instance_name)
+        });
         cx.subscribe(&new_name_input_state, Self::on_new_name_input).detach();
 
         let minecraft_versions = FrontendMetadata::request(&data.metadata, MetadataRequest::MinecraftVersionManifest, cx);
