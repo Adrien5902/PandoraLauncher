@@ -212,6 +212,7 @@ fn setup_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         .level_for("backend", level)
         .level_for("frontend", level)
         .level_for("bridge", level)
+        .level_for("gpui_component::text", log::LevelFilter::Off)
         .level(log::LevelFilter::Warn);
 
     let colors_line = ColoredLevelConfig::new().info(fern::colors::Color::BrightWhite);
