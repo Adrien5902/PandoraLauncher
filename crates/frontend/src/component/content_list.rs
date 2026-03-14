@@ -3,7 +3,7 @@ use std::{hash::{DefaultHasher, Hash, Hasher}, sync::{
 }};
 
 use bridge::{
-    handle::BackendHandle, instance::{InstanceID, InstanceContentID, InstanceContentSummary, ContentType, ContentSummary}, message::MessageToBackend
+    handle::BackendHandle, instance::{ContentSummary, ContentType, InstanceContentID, InstanceContentSummary, InstanceID, UNKNOWN_CONTENT_SUMMARY}, message::MessageToBackend
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -14,7 +14,7 @@ use rustc_hash::FxHashSet;
 use schema::{loader::Loader, text_component::FlatTextComponent};
 use ustr::Ustr;
 
-use crate::{icon::PandoraIcon, interface_config::InterfaceConfig, png_render_cache, ts};
+use crate::{component::error_alert::ErrorAlert, icon::PandoraIcon, interface_config::InterfaceConfig, png_render_cache, ts};
 
 #[derive(Clone)]
 struct ContentEntryChild {
@@ -25,6 +25,8 @@ struct ContentEntryChild {
     lowercase_search_keys: Arc<[Arc<str>]>,
     enabled: bool,
     parent_enabled: bool,
+    disabled_third_party_downloads: bool,
+    is_missing: bool,
 }
 
 enum SummaryOrChild {
@@ -369,7 +371,7 @@ impl ContentListDelegate {
         let enabled = child.enabled;
         let visually_enabled = enabled && child.parent_enabled;
 
-        let item_content = h_flex()
+        let mut item_content = h_flex()
             .gap_1()
             .pl_4()
             .child(
@@ -400,6 +402,12 @@ impl ContentListDelegate {
             .child(desc1)
             .when_some(desc2, |div, desc2| div.child(desc2));
 
+        if child.disabled_third_party_downloads {
+            item_content = item_content.child(ErrorAlert::new("Blocked".into(), "The mod author has blocked downloads from third-party launchers".into()).w(Length::Auto));
+        } else if child.is_missing {
+            item_content = item_content.child(Button::new("download").label("Download").success());
+        }
+
         ListItem::new(("item", element_id)).p_1().child(item_content)
     }
 
@@ -408,17 +416,6 @@ impl ContentListDelegate {
 
         let mut mods = Vec::with_capacity(new_content.len());
         let mut children = Vec::with_capacity(new_content.len());
-
-        let unknown = Arc::new(bridge::instance::ContentSummary {
-            id: None,
-            hash: [0_u8; 20],
-            name: None,
-            authors: "".into(),
-            version_str: "unknown".into(),
-            rich_description: None,
-            png_icon: None,
-            extra: ContentType::Fabric,
-        });
 
         for modification in new_content.iter() {
             mods.push(modification.clone());
@@ -430,7 +427,9 @@ impl ContentListDelegate {
                         continue;
                     }
 
-                    let summary = summaries.get(index).cloned().flatten().unwrap_or(unknown.clone());
+                    let summary = summaries.get(index).cloned().flatten();
+                    let is_missing = summary.is_none();
+                    let summary = summary.unwrap_or(UNKNOWN_CONTENT_SUMMARY.clone());
 
                     let enabled = if let Some(id) = &summary.id && modification.disabled_children.disabled_ids.contains(id) {
                         false
@@ -455,6 +454,55 @@ impl ContentListDelegate {
                         path: download.path.clone(),
                         enabled,
                         parent_enabled: modification.enabled,
+                        disabled_third_party_downloads: false,
+                        is_missing,
+                    });
+                }
+                inner_children.sort_by(|a, b| {
+                    lexical_sort::natural_lexical_cmp(&a.lowercase_search_keys.last().unwrap(), &b.lowercase_search_keys.last().unwrap())
+                });
+                children.push(inner_children);
+            } else if let ContentType::CurseforgeModpack { files, summaries, .. } = &modification.content_summary.extra {
+                let mut inner_children = Vec::new();
+                for (index, download) in files.iter().enumerate() {
+                    let (summary, cached_info) = summaries.get(index).cloned().unwrap_or((None, None));
+
+                    let is_missing = summary.is_none();
+                    let summary = summary.unwrap_or(UNKNOWN_CONTENT_SUMMARY.clone());
+
+                    let filename: Arc<str> = if let Some(cached_info) = &cached_info {
+                        cached_info.filename.clone()
+                    } else {
+                        format!("{}-{}", download.project_id, download.file_id).into()
+                    };
+
+                    let enabled = if let Some(id) = &summary.id && modification.disabled_children.disabled_ids.contains(id) {
+                        false
+                    } else if let Some(name) = &summary.name && modification.disabled_children.disabled_names.contains(name) {
+                        false
+                    } else {
+                        !modification.disabled_children.disabled_filenames.contains(&*filename)
+                    };
+
+                    let lowercase_filename: Arc<str> = filename.to_lowercase().into();
+                    let lowercase_search_keys = summary.id.clone().into_iter()
+                        .chain(summary.name.clone().into_iter())
+                        .chain(std::iter::once(lowercase_filename))
+                        .collect();
+
+                    let disabled_third_party_downloads = cached_info.as_ref()
+                        .map(|info| info.disabled_third_party_downloads).unwrap_or(false);
+
+                    inner_children.push(ContentEntryChild {
+                        summary,
+                        parent_filename_hash: modification.filename_hash,
+                        parent: modification.id,
+                        lowercase_search_keys,
+                        path: filename,
+                        enabled,
+                        parent_enabled: modification.enabled,
+                        disabled_third_party_downloads,
+                        is_missing,
                     });
                 }
                 inner_children.sort_by(|a, b| {
@@ -661,7 +709,7 @@ fn create_descriptions(name: Option<Arc<str>>, version: Arc<str>, authors: Arc<s
         }
 
         let description1 = v_flex()
-            .w_2_5()
+            .w_1_5()
             .text_ellipsis()
             .child(SharedString::from(filename))
             .child(SharedString::from(version));

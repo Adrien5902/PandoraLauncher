@@ -277,7 +277,7 @@ fn open_from_entity(
         },
         FrontendMetadataResult::Error(message) => {
             window.open_dialog(cx, move |modal, _, _| {
-                modal.title(title.clone()).child(ErrorAlert::new("error", ts!("instance.content.requesting_from_modrinth_error"), message.clone()))
+                modal.title(title.clone()).child(ErrorAlert::new(ts!("instance.content.requesting_from_modrinth_error"), message.clone()))
             });
         },
     }

@@ -1,7 +1,8 @@
 use std::{path::Path, sync::Arc};
 
 use indexmap::IndexMap;
-use schema::{auxiliary::AuxDisabledChildren, content::ContentSource, loader::Loader, modification::ModrinthModpackFileDownload, text_component::FlatTextComponent};
+use once_cell::sync::Lazy;
+use schema::{auxiliary::AuxDisabledChildren, content::ContentSource, curseforge::{CachedCurseforgeFileInfo, CurseforgeModpackFile, CurseforgeModpackMinecraft}, loader::Loader, modification::ModrinthModpackFileDownload, text_component::FlatTextComponent};
 use ustr::Ustr;
 
 use crate::safe_path::SafePath;
@@ -85,8 +86,28 @@ pub struct ContentSummary {
     pub extra: ContentType,
 }
 
+impl ContentSummary {
+    pub fn is_unknown(summary: &Arc<Self>) -> bool {
+        Arc::ptr_eq(summary, &*UNKNOWN_CONTENT_SUMMARY)
+    }
+}
+
+pub static UNKNOWN_CONTENT_SUMMARY: Lazy<Arc<ContentSummary>> = Lazy::new(|| {
+    Arc::new(ContentSummary {
+        id: None,
+        hash: [0_u8; 20],
+        name: None,
+        authors: "".into(),
+        version_str: "unknown".into(),
+        rich_description: None,
+        png_icon: None,
+        extra: ContentType::Unknown,
+    })
+});
+
 #[derive(Debug, Clone)]
 pub enum ContentType {
+    Unknown,
     Fabric,
     LegacyForge,
     Forge,
@@ -98,10 +119,30 @@ pub enum ContentType {
         overrides: Arc<[(SafePath, Arc<[u8]>)]>,
         dependencies: IndexMap<Arc<str>, Arc<str>>,
     },
+    CurseforgeModpack {
+        files: Arc<[CurseforgeModpackFile]>,
+        summaries: Arc<[(Option<Arc<ContentSummary>>, Option<CachedCurseforgeFileInfo>)]>,
+        overrides: Arc<[(SafePath, Arc<[u8]>)]>,
+        minecraft: CurseforgeModpackMinecraft,
+    },
     ResourcePack,
 }
 
 impl ContentType {
+    pub fn content_folder(&self) -> Option<&'static str> {
+        match self {
+            Self::Fabric | Self::Forge | Self::LegacyForge | Self::NeoForge | Self::JavaModule | Self::ModrinthModpack { .. } | Self::CurseforgeModpack { .. } => {
+                Some("mods")
+            },
+            ContentType::ResourcePack => {
+                Some("resourcepacks")
+            },
+            ContentType::Unknown => {
+                None
+            }
+        }
+    }
+
     pub fn is_strict_minecraft_version(&self) -> bool {
         match self {
             Self::ResourcePack => false,

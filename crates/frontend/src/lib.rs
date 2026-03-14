@@ -207,7 +207,7 @@ pub fn start(
                 _ = main_window.update(cx, |_, window, cx| {
                     window.open_dialog(cx, move |modal, _, _| {
                         let error = "Pandora was downloaded through Flathub, which has a policy disallowing software from accessing both X11 and Wayland.\n\nMinecraft will be forced to run under Wayland, which may cause issues.\n\nhttps://github.com/flathub-infra/flatpak-builder-lint/pull/935";
-                        let error_widget = ErrorAlert::new("error", "Flatpak Permission Warning".into(), error.into());
+                        let error_widget = ErrorAlert::new("Flatpak Permission Warning".into(), error.into());
 
                         return modal
                             .child(error_widget)
@@ -220,7 +220,7 @@ pub fn start(
                 _ = main_window.update(cx, |_, window, cx| {
                     window.open_dialog(cx, move |modal, _, _| {
                         let error = "It seems that X11/Xwayland is not available.\n\nMinecraft will be forced to run under Wayland, which may cause issues.";
-                        let error_widget = ErrorAlert::new("error", "X11 Unavailable".into(), error.into());
+                        let error_widget = ErrorAlert::new("X11 Unavailable".into(), error.into());
 
                         return modal
                             .child(error_widget)

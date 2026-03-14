@@ -5,18 +5,23 @@ use crate::icon::PandoraIcon;
 
 #[derive(IntoElement)]
 pub struct ErrorAlert {
-    id: ElementId,
     title: SharedString,
     message: SharedString,
+    w: Length
 }
 
 impl ErrorAlert {
-    pub fn new(id: impl Into<ElementId>, title: SharedString, message: SharedString) -> Self {
+    pub fn new(title: SharedString, message: SharedString) -> Self {
         Self {
-            id: id.into(),
             title,
             message,
+            w: Length::Definite(DefiniteLength::Fraction(1.0)),
         }
+    }
+
+    pub fn w(mut self, length: Length) -> Self {
+        self.w = length;
+        self
     }
 }
 
@@ -33,8 +38,7 @@ impl RenderOnce for ErrorAlert {
         let border_color = danger;
 
         h_flex()
-            .id(self.id)
-            .w_full()
+            .w(self.w)
             .text_color(fg)
             .bg(bg)
             .px(padding_x)

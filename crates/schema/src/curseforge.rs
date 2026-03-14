@@ -34,6 +34,12 @@ pub struct CurseforgeGetModFilesRequest {
     pub page_size: Option<u32>,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeGetFilesRequest {
+    pub file_ids: Vec<u32>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CurseforgeSearchResult {
     pub data: Arc<[CurseforgeHit]>,
@@ -236,4 +242,45 @@ impl CurseforgeClassId {
             _ => Self::Other,
         }
     }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeModpackManifestJson {
+    pub minecraft: CurseforgeModpackMinecraft,
+    pub version: Arc<str>,
+    pub name: Option<Arc<str>>,
+    pub files: Arc<[CurseforgeModpackFile]>,
+    pub author: Option<Arc<str>>,
+    pub overrides: Option<Arc<str>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseforgeModpackMinecraft {
+    pub version: Option<Arc<str>>,
+    pub mod_loaders: Arc<[CurseforgeModpackModLoader]>,
+    pub recommended_ram: Option<u32>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CurseforgeModpackModLoader {
+    pub id: Arc<str>,
+    pub primary: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CurseforgeModpackFile {
+    #[serde(rename = "projectID")]
+    pub project_id: u32,
+    #[serde(rename = "fileID")]
+    pub file_id: u32,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct CachedCurseforgeFileInfo {
+    pub hash: [u8; 20],
+    pub filename: Arc<str>,
+    pub disabled_third_party_downloads: bool,
 }

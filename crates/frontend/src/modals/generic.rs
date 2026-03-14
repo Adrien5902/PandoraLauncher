@@ -31,7 +31,7 @@ pub fn show_notification_with_note(
         .autohide(false)
         .content(move |notification, window, cx| {
             if let Some(error) = &*modal_action.error.read() {
-                let error_widget = ErrorAlert::new("error", error_title.clone(), error.clone().into());
+                let error_widget = ErrorAlert::new(error_title.clone(), error.clone().into());
                 return error_widget.into_any_element();
             }
 
@@ -132,7 +132,7 @@ pub fn show_modal(
 ) {
     window.open_dialog(cx, move |modal, window, cx| {
         if let Some(error) = &*modal_action.error.read() {
-            let error_widget = ErrorAlert::new("error", error_title.clone(), error.clone().into());
+            let error_widget = ErrorAlert::new(error_title.clone(), error.clone().into());
 
             return modal.title(title.clone()).child(v_flex().gap_3().child(error_widget))
                 .footer(Button::new("ok").label(ts!("common.ok")).on_click(|_, window, cx| window.close_dialog(cx)));

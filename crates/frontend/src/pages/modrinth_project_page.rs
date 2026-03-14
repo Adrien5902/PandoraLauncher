@@ -185,7 +185,6 @@ impl Render for ModrinthProjectPage {
             v_flex()
                 .p_4()
                 .child(ErrorAlert::new(
-                    "project_error",
                     ts!("instance.content.error_loading"),
                     error.clone(),
                 ))

@@ -6,12 +6,12 @@ use bridge::{
 use parking_lot::Mutex;
 use reqwest::StatusCode;
 use rustc_hash::FxHashSet;
-use schema::{content::ContentSource, curseforge::{CURSEFORGE_RELATION_TYPE_REQUIRED_DEPENDENCY, CurseforgeGetModFilesRequest, CurseforgeModLoaderType}, loader::Loader, modrinth::{ModrinthDependencyType, ModrinthLoader, ModrinthProjectVersionsRequest}};
+use schema::{content::ContentSource, curseforge::{CURSEFORGE_RELATION_TYPE_REQUIRED_DEPENDENCY, CachedCurseforgeFileInfo, CurseforgeGetFilesRequest, CurseforgeGetModFilesRequest, CurseforgeModLoaderType}, loader::Loader, modrinth::{ModrinthDependencyType, ModrinthLoader, ModrinthProjectVersionsRequest}};
 use sha1::{Digest, Sha1};
 use strum::IntoEnumIterator;
 use tokio::sync::Semaphore;
 
-use crate::{BackendState, instance::{ContentFolder, Instance}, lockfile::Lockfile, metadata::{items::{CurseforgeGetModFilesMetadataItem, MinecraftVersionManifestMetadataItem, ModrinthProjectVersionsMetadataItem, ModrinthVersionMetadataItem}, manager::MetaLoadError}};
+use crate::{BackendState, instance::{ContentFolder, Instance}, lockfile::Lockfile, metadata::{items::{CurseforgeGetFilesMetadataItem, CurseforgeGetModFilesMetadataItem, MinecraftVersionManifestMetadataItem, ModrinthProjectVersionsMetadataItem, ModrinthVersionMetadataItem}, manager::MetaLoadError}};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ContentInstallError {
@@ -39,6 +39,8 @@ pub enum ContentInstallError {
     MetaLoadError(#[from] MetaLoadError),
     #[error("Mismatched project id for version {0}, expected {1} got {2}")]
     MismatchedProjectIdForVersion(Arc<str>, Arc<str>, Arc<str>),
+    #[error("Invalid url: {0}")]
+    InvalidUrl(#[from] url::ParseError),
     #[error("No filename")]
     NoFilename,
     #[error("Content already installed")]
@@ -53,7 +55,7 @@ struct InstallFromContentLibrary {
     hash: [u8; 20],
     install_path: Arc<Path>,
     content_file: ContentInstallFile,
-    mod_summary: Option<Arc<ContentSummary>>,
+    mod_summary: Arc<ContentSummary>,
     dependencies: Vec<ContentInstallFile>,
 }
 
@@ -374,55 +376,42 @@ impl BackendState {
                 let (path, hash, mod_summary) = self.download_file_into_library(&modal_action,
                     (&safe_filename).into(), url, sha1, size, &semaphore).await?;
 
-                if is_wrong_version {
-                    let is_strict_minecraft_version = if let Some(mod_summary) = &mod_summary {
-                        mod_summary.extra.is_strict_minecraft_version()
-                    } else {
-                        true
-                    };
-                    if is_strict_minecraft_version {
-                        return Err(ContentInstallError::UnableToFindVersion);
-                    }
+                if is_wrong_version && mod_summary.extra.is_strict_minecraft_version() {
+                    return Err(ContentInstallError::UnableToFindVersion);
                 }
-                if is_wrong_loader {
-                    let is_strict_loader = if let Some(mod_summary) = &mod_summary {
-                        mod_summary.extra.is_strict_loader()
-                    } else {
-                        true
-                    };
-                    if is_strict_loader {
-                        return Err(ContentInstallError::UnableToFindVersion);
-                    }
+                if is_wrong_loader && mod_summary.extra.is_strict_loader() {
+                    return Err(ContentInstallError::UnableToFindVersion);
                 }
 
                 let install_path = match &content_file.path {
                     ContentInstallPath::Raw(path) => path.clone(),
                     ContentInstallPath::Safe(safe_path) => safe_path.to_path(Path::new("")).into(),
                     ContentInstallPath::Automatic => {
-                        let base = if let Some(mod_summary) = &mod_summary {
-                            match mod_summary.extra {
-                                ContentType::Fabric | ContentType::Forge | ContentType::LegacyForge | ContentType::NeoForge | ContentType::JavaModule | ContentType::ModrinthModpack { .. } => {
-                                    Path::new("mods")
-                                },
-                                ContentType::ResourcePack => {
-                                    Path::new("resourcepacks")
+                        let base = match mod_summary.extra {
+                            ContentType::Fabric | ContentType::Forge | ContentType::LegacyForge | ContentType::NeoForge | ContentType::JavaModule | ContentType::ModrinthModpack { .. } | ContentType::CurseforgeModpack { .. } => {
+                                Path::new("mods")
+                            },
+                            ContentType::ResourcePack => {
+                                Path::new("resourcepacks")
+                            },
+                            ContentType::Unknown => {
+                                if let Some(loaders) = &version.loaders {
+                                    let mut base = None;
+                                    for loader in loaders.iter() {
+                                        base = loader.install_directory();
+                                        if base.is_some() {
+                                            break;
+                                        }
+                                    }
+                                    if let Some(base) = base {
+                                        Path::new(base)
+                                    } else {
+                                        return Err(ContentInstallError::UnableToDetermineContentType(install_file.filename.clone()))
+                                    }
+                                } else {
+                                    return Err(ContentInstallError::UnableToDetermineContentType(install_file.filename.clone()))
                                 }
                             }
-                        } else if let Some(loaders) = &version.loaders {
-                            let mut base = None;
-                            for loader in loaders.iter() {
-                                base = loader.install_directory();
-                                if base.is_some() {
-                                    break;
-                                }
-                            }
-                            if let Some(base) = base {
-                                Path::new(base)
-                            } else {
-                                return Err(ContentInstallError::UnableToDetermineContentType(install_file.filename.clone()))
-                            }
-                        } else {
-                            return Err(ContentInstallError::UnableToDetermineContentType(install_file.filename.clone()))
                         };
 
                         safe_filename.to_path(base).into()
@@ -570,42 +559,23 @@ impl BackendState {
                 let (path, hash, mod_summary) = self.download_file_into_library(&modal_action,
                     (&safe_filename).into(), url, sha1, size, &semaphore).await?;
 
-                if is_wrong_version {
-                    let is_strict_minecraft_version = if let Some(mod_summary) = &mod_summary {
-                        mod_summary.extra.is_strict_minecraft_version()
-                    } else {
-                        true
-                    };
-                    if is_strict_minecraft_version {
-                        return Err(ContentInstallError::UnableToFindVersion);
-                    }
+                if is_wrong_version && mod_summary.extra.is_strict_minecraft_version() {
+                    return Err(ContentInstallError::UnableToFindVersion);
                 }
-                if is_wrong_loader {
-                    let is_strict_loader = if let Some(mod_summary) = &mod_summary {
-                        mod_summary.extra.is_strict_loader()
-                    } else {
-                        true
-                    };
-                    if is_strict_loader {
-                        return Err(ContentInstallError::UnableToFindVersion);
-                    }
+                if is_wrong_loader && mod_summary.extra.is_strict_loader() {
+                    // todo: determine loader(s) from summary and check if it is compatible with the loader hint
+                    // todo: if we install a fabric mod on forge 1.20.1 / neoforge 1.21.1, we can install sinytra instead of erroring
+                    return Err(ContentInstallError::UnableToFindVersion);
                 }
 
                 let install_path = match &content_file.path {
                     ContentInstallPath::Raw(path) => path.clone(),
                     ContentInstallPath::Safe(safe_path) => safe_path.to_path(Path::new("")).into(),
                     ContentInstallPath::Automatic => {
-                        let base = if let Some(mod_summary) = &mod_summary {
-                            match mod_summary.extra {
-                                ContentType::Fabric | ContentType::Forge | ContentType::LegacyForge | ContentType::NeoForge | ContentType::JavaModule | ContentType::ModrinthModpack { .. } => {
-                                    Path::new("mods")
-                                },
-                                ContentType::ResourcePack => {
-                                    Path::new("resourcepacks")
-                                }
-                            }
+                        let base = if let Some(base) = mod_summary.extra.content_folder() {
+                            Path::new(base)
                         } else {
-                            return Err(ContentInstallError::UnableToDetermineContentType(file.file_name.clone()))
+                            return Err(ContentInstallError::UnableToDetermineContentType(file.file_name.clone()));
                         };
 
                         safe_filename.to_path(base).into()
@@ -643,10 +613,14 @@ impl BackendState {
                 }
             },
             ContentDownload::Url { ref url, ref sha1, size } => {
+                let mut url_filename = None;
                 let name = match &content_file.path {
                     ContentInstallPath::Raw(path) => (&**path).into(),
                     ContentInstallPath::Safe(safe_path) => safe_path.into(),
-                    ContentInstallPath::Automatic => unimplemented!(),
+                    ContentInstallPath::Automatic => {
+                        url_filename = Some(url_to_filename(url)?);
+                        url_filename.as_ref().unwrap().into()
+                    },
                 };
 
                 let (path, hash, mod_summary) = self.download_file_into_library(&modal_action,
@@ -655,7 +629,9 @@ impl BackendState {
                 let install_path = match &content_file.path {
                     ContentInstallPath::Raw(path) => path.clone(),
                     ContentInstallPath::Safe(safe_path) => safe_path.to_path(Path::new("")).into(),
-                    ContentInstallPath::Automatic => unimplemented!(),
+                    ContentInstallPath::Automatic => {
+                        url_filename.as_ref().unwrap().to_path(Path::new("")).into()
+                    },
                 };
 
                 InstallFromContentLibrary {
@@ -730,15 +706,8 @@ impl BackendState {
                             return Err(ContentInstallError::NoFilename);
                         };
 
-                        let base = if let Some(mod_summary) = &mod_summary {
-                            match mod_summary.extra {
-                                ContentType::Fabric | ContentType::Forge | ContentType::LegacyForge | ContentType::NeoForge | ContentType::JavaModule | ContentType::ModrinthModpack { .. } => {
-                                    Path::new("mods")
-                                },
-                                ContentType::ResourcePack => {
-                                    Path::new("resourcepacks")
-                                }
-                            }
+                        let base = if let Some(base) = mod_summary.extra.content_folder() {
+                            Path::new(base)
                         } else {
                             return Err(ContentInstallError::UnableToDetermineContentType(file_name.to_string_lossy().into()))
                         };
@@ -760,8 +729,7 @@ impl BackendState {
         };
 
         if let Some(installed_content_ids) = installed_content_ids &&
-            let Some(mod_summary) = &content_install_file.mod_summary &&
-            let Some(id) = &mod_summary.id
+            let Some(id) = &content_install_file.mod_summary.id
         {
             let unique = installed_content_ids.lock().summary_ids.insert(id.clone());
             if skip_if_already_installed && !unique {
@@ -772,14 +740,11 @@ impl BackendState {
         Ok(content_install_file)
     }
 
-    fn replace_aux_path(&self, replace: &Path, new_summary: &Option<Arc<ContentSummary>>, new_path: &Path) {
-        let Some(old_summary) = self.mod_metadata_manager.get_path(&replace) else {
+    fn replace_aux_path(&self, replace: &Path, new_summary: &Arc<ContentSummary>, new_path: &Path) {
+        let old_summary = self.mod_metadata_manager.get_path(&replace);
+        if ContentSummary::is_unknown(&old_summary) {
             return;
-        };
-
-        let Some(new_summary) = new_summary else {
-            return;
-        };
+        }
 
         let Some(old_aux_path) = crate::pandora_aux_path(&old_summary.id, &old_summary.name, &replace) else {
             return;
@@ -789,7 +754,13 @@ impl BackendState {
             return;
         }
 
+        if ContentSummary::is_unknown(&new_summary) {
+            _ = std::fs::remove_file(&old_aux_path);
+            return;
+        }
+
         let Some(new_aux_path) = crate::pandora_aux_path(&new_summary.id, &new_summary.name, new_path) else {
+            _ = std::fs::remove_file(&old_aux_path);
             return;
         };
 
@@ -798,36 +769,93 @@ impl BackendState {
         }
     }
 
-    async fn download_file_into_library(&self, modal_action: &ModalAction, name: FilenameAndExtension, url: &Arc<str>, sha1: &Arc<str>, size: usize, semaphore: &tokio::sync::Semaphore) -> Result<(PathBuf, [u8; 20], Option<Arc<ContentSummary>>), ContentInstallError> {
+    async fn download_file_into_library(&self, modal_action: &ModalAction, name: FilenameAndExtension, url: &Arc<str>, sha1: &Arc<str>, size: usize, semaphore: &tokio::sync::Semaphore) -> Result<(PathBuf, [u8; 20], Arc<ContentSummary>), ContentInstallError> {
         let mut result = self.download_file_into_library_inner(modal_action, name, url, sha1, size, semaphore).await?;
 
-        if let Some(summary) = &result.2 {
-            if let ContentType::ModrinthModpack { downloads, .. } = &summary.extra {
-                let mut tasks = Vec::new();
+        if let ContentType::ModrinthModpack { downloads, .. } = &result.2.extra {
+            let mut tasks = Vec::new();
 
-                for download in downloads.iter() {
-                    let Some(path) = SafePath::new(&download.path) else {
-                        continue;
-                    };
+            for download in downloads.iter() {
+                let Some(path) = SafePath::new(&download.path) else {
+                    continue;
+                };
 
-                    let name = FilenameAndExtension {
-                        filename: path.file_name().map(OsString::from),
-                        extension: path.extension().map(OsString::from),
-                    };
+                let name = FilenameAndExtension {
+                    filename: path.file_name().map(OsString::from),
+                    extension: path.extension().map(OsString::from),
+                };
 
-                    tasks.push(self.download_file_into_library_inner(modal_action, name,
-                        &download.downloads[0], &download.hashes.sha1, download.file_size, semaphore));
-                }
-
-                _ = futures::future::try_join_all(tasks).await;
+                tasks.push(self.download_file_into_library_inner(modal_action, name,
+                    &download.downloads[0], &download.hashes.sha1, download.file_size, semaphore));
             }
+
+            _ = futures::future::try_join_all(tasks).await;
             result.2 = self.mod_metadata_manager.get_path(&result.0);
+        } else if let ContentType::CurseforgeModpack { files, summaries, .. } = &result.2.extra {
+            let mut file_ids = Vec::new();
+
+            for (index, file) in files.iter().enumerate() {
+                if summaries.get(index).map(|v| v.0.is_none()).unwrap_or(true) {
+                    file_ids.push(file.file_id);
+                }
+            }
+
+            if !file_ids.is_empty() {
+                // todo: grab semaphore and add progress bar to modal_action while fetching
+
+                let files_result = self.meta.fetch(&CurseforgeGetFilesMetadataItem(&CurseforgeGetFilesRequest {
+                    file_ids,
+                })).await;
+
+                if let Ok(files) = files_result {
+                    let mut tasks = Vec::new();
+
+                    for file in files.data.iter() {
+                        let sha1 = file.hashes.iter()
+                            .find(|hash| hash.algo == 1).map(|hash| &hash.value);
+                        let Some(sha1) = sha1 else {
+                            continue;
+                        };
+
+                        let mut hash = [0u8; 20];
+                        let Ok(_) = hex::decode_to_slice(&**sha1, &mut hash) else {
+                            log::warn!("File {} has invalid sha1: {}", file.file_name, sha1);
+                            continue;
+                        };
+
+                        self.mod_metadata_manager.set_cached_curseforge_info(file.id, CachedCurseforgeFileInfo {
+                            hash,
+                            filename: file.file_name.clone(),
+                            disabled_third_party_downloads: file.download_url.is_none()
+                        });
+
+                        let Some(path) = SafePath::new(&file.file_name) else {
+                            continue;
+                        };
+
+                        let name = FilenameAndExtension {
+                            filename: path.file_name().map(OsString::from),
+                            extension: path.extension().map(OsString::from),
+                        };
+
+                        let Some(download_url) = &file.download_url else {
+                            continue;
+                        };
+
+                        tasks.push(self.download_file_into_library_inner(modal_action, name,
+                            &download_url, sha1, file.file_length as usize, semaphore));
+                    }
+
+                    _ = futures::future::try_join_all(tasks).await;
+                    result.2 = self.mod_metadata_manager.get_path(&result.0);
+                }
+            }
         }
 
         Ok(result)
     }
 
-    async fn download_file_into_library_inner(&self, modal_action: &ModalAction, name: FilenameAndExtension, url: &Arc<str>, sha1: &Arc<str>, size: usize, semaphore: &tokio::sync::Semaphore) -> Result<(PathBuf, [u8; 20], Option<Arc<ContentSummary>>), ContentInstallError> {
+    async fn download_file_into_library_inner(&self, modal_action: &ModalAction, name: FilenameAndExtension, url: &Arc<str>, sha1: &Arc<str>, size: usize, semaphore: &tokio::sync::Semaphore) -> Result<(PathBuf, [u8; 20], Arc<ContentSummary>), ContentInstallError> {
         let mut expected_hash = [0u8; 20];
         let Ok(_) = hex::decode_to_slice(&**sha1, &mut expected_hash) else {
             log::warn!("Content install has invalid sha1: {}", sha1);
@@ -928,25 +956,39 @@ impl BackendState {
 
 fn determine_loader_from_content(content: &[InstallFromContentLibrary]) -> Option<Loader> {
     for content in content {
-        if let Some(summary) = &content.mod_summary {
-            match &summary.extra {
-                ContentType::Fabric => return Some(Loader::Fabric),
-                ContentType::LegacyForge => return Some(Loader::Forge),
-                ContentType::Forge => return Some(Loader::Forge),
-                ContentType::NeoForge => return Some(Loader::NeoForge),
-                ContentType::JavaModule => {},
-                ContentType::ModrinthModpack { dependencies, .. } => {
-                    for (key, _) in dependencies {
-                        match &**key {
-                            "forge" => return Some(Loader::Forge),
-                            "neoforge" => return Some(Loader::NeoForge),
-                            "fabric-loader" => return Some(Loader::Fabric),
-                            _ => {}
-                        }
+        match &content.mod_summary.extra {
+            ContentType::Fabric => return Some(Loader::Fabric),
+            ContentType::LegacyForge => return Some(Loader::Forge),
+            ContentType::Forge => return Some(Loader::Forge),
+            ContentType::NeoForge => return Some(Loader::NeoForge),
+            ContentType::JavaModule | ContentType::Unknown => {},
+            ContentType::ModrinthModpack { dependencies, .. } => {
+                for (key, _) in dependencies {
+                    match &**key {
+                        "forge" => return Some(Loader::Forge),
+                        "neoforge" => return Some(Loader::NeoForge),
+                        "fabric-loader" => return Some(Loader::Fabric),
+                        _ => {}
                     }
-                },
-                ContentType::ResourcePack => {},
-            }
+                }
+            },
+            ContentType::CurseforgeModpack { minecraft, .. } => {
+                return minecraft.mod_loaders.iter()
+                    .find(|loader| loader.primary)
+                    .or_else(|| minecraft.mod_loaders.first())
+                    .and_then(|loader| {
+                        if loader.id.starts_with("forge-") {
+                            Some(Loader::Forge)
+                        } else if loader.id.starts_with("neoforge-") {
+                            Some(Loader::NeoForge)
+                        } else if loader.id.starts_with("fabric-") {
+                            Some(Loader::Fabric)
+                        } else {
+                            None
+                        }
+                    });
+            },
+            ContentType::ResourcePack => {},
         }
     }
     None
@@ -954,22 +996,24 @@ fn determine_loader_from_content(content: &[InstallFromContentLibrary]) -> Optio
 
 fn determine_minecraft_version_from_content(content: &[InstallFromContentLibrary]) -> Option<Arc<str>> {
     for content in content {
-        if let Some(summary) = &content.mod_summary {
-            match &summary.extra {
-                ContentType::Fabric => {},
-                ContentType::LegacyForge => {},
-                ContentType::Forge => {},
-                ContentType::NeoForge => {},
-                ContentType::JavaModule => {},
-                ContentType::ModrinthModpack { dependencies, .. } => {
-                    for (key, value) in dependencies {
-                        if &**key == "minecraft" {
-                            return Some(value.clone());
-                        }
+        match &content.mod_summary.extra {
+            ContentType::Fabric => {},
+            ContentType::LegacyForge => {},
+            ContentType::Forge => {},
+            ContentType::NeoForge => {},
+            ContentType::JavaModule => {},
+            ContentType::Unknown => {},
+            ContentType::ModrinthModpack { dependencies, .. } => {
+                for (key, value) in dependencies {
+                    if &**key == "minecraft" {
+                        return Some(value.clone());
                     }
-                },
-                ContentType::ResourcePack => {},
-            }
+                }
+            },
+            ContentType::CurseforgeModpack { minecraft, .. } => {
+                return minecraft.version.clone();
+            },
+            ContentType::ResourcePack => {},
         }
     }
     None
@@ -977,11 +1021,27 @@ fn determine_minecraft_version_from_content(content: &[InstallFromContentLibrary
 
 fn determine_name_from_content(content: &[InstallFromContentLibrary]) -> Option<Arc<str>> {
     for content in content {
-        if let Some(summary) = &content.mod_summary {
-            if let Some(name) = &summary.name {
-                return Some(name.clone());
-            }
+        if let Some(name) = &content.mod_summary.name {
+            return Some(name.clone());
         }
     }
     None
+}
+
+fn url_to_filename(url: &str) -> Result<SafePath, ContentInstallError> {
+    let parsed = url::Url::parse(url)?;
+
+    let filename = parsed.path_segments()
+        .and_then(|s| s.last())
+        .to_owned();
+
+    let Some(filename) = filename else {
+        return Err(ContentInstallError::NoFilename);
+    };
+
+    let Some(filename) = SafePath::new(filename) else {
+        return Err(ContentInstallError::InvalidFilename(filename.into()));
+    };
+
+    Ok(filename)
 }

@@ -4,7 +4,7 @@ use std::{
 
 use reqwest::RequestBuilder;
 use schema::{
-    assets_index::AssetsIndex, curseforge::{CURSEFORGE_SEARCH_URL, CurseforgeGetModFilesRequest, CurseforgeGetModFilesResult, CurseforgeSearchRequest, CurseforgeSearchResult, MINECRAFT_GAME_ID}, fabric_launch::FabricLaunch, fabric_loader_manifest::{FABRIC_LOADER_MANIFEST_URL, FabricLoaderManifest}, forge::{ForgeMavenManifest, NeoforgeMavenManifest, VersionFragment}, java_runtime_component::JavaRuntimeComponentManifest, java_runtimes::{JAVA_RUNTIMES_URL, JavaRuntimes}, maven::MavenMetadataXml, modrinth::{MODRINTH_PROJECT_URL, MODRINTH_SEARCH_URL, ModrinthLoader, ModrinthProjectRequest, ModrinthProjectResult, ModrinthProjectVersion, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthSearchRequest, ModrinthSearchResult, ModrinthVersionFileUpdateResult}, version::MinecraftVersion, version_manifest::{MOJANG_VERSION_MANIFEST_URL, MinecraftVersionLink, MinecraftVersionManifest}
+    assets_index::AssetsIndex, curseforge::{CURSEFORGE_SEARCH_URL, CurseforgeGetFilesRequest, CurseforgeGetModFilesRequest, CurseforgeGetModFilesResult, CurseforgeSearchRequest, CurseforgeSearchResult, MINECRAFT_GAME_ID}, fabric_launch::FabricLaunch, fabric_loader_manifest::{FABRIC_LOADER_MANIFEST_URL, FabricLoaderManifest}, forge::{ForgeMavenManifest, NeoforgeMavenManifest, VersionFragment}, java_runtime_component::JavaRuntimeComponentManifest, java_runtimes::{JAVA_RUNTIMES_URL, JavaRuntimes}, maven::MavenMetadataXml, modrinth::{MODRINTH_PROJECT_URL, MODRINTH_SEARCH_URL, ModrinthLoader, ModrinthProjectRequest, ModrinthProjectResult, ModrinthProjectVersion, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthSearchRequest, ModrinthSearchResult, ModrinthVersionFileUpdateResult}, version::MinecraftVersion, version_manifest::{MOJANG_VERSION_MANIFEST_URL, MinecraftVersionLink, MinecraftVersionManifest}
 };
 use serde::Serialize;
 use ustr::Ustr;
@@ -561,6 +561,31 @@ impl<'a> MetadataItem for CurseforgeGetModFilesMetadataItem<'a> {
 
     fn state(&self, states: &mut MetadataManagerStates) -> MetaLoadStateWrapper<Self::T> {
         states.curseforge_get_mod_files.entry(self.0.clone()).or_default().clone()
+    }
+
+    fn deserialize(bytes: &[u8]) -> Result<Self::T, MetaLoadError> {
+        Ok(serde_json::from_slice(bytes)?)
+    }
+}
+
+#[derive(Debug)]
+pub struct CurseforgeGetFilesMetadataItem<'a>(pub &'a CurseforgeGetFilesRequest);
+
+impl<'a> MetadataItem for CurseforgeGetFilesMetadataItem<'a> {
+    type T = CurseforgeGetModFilesResult;
+
+    fn request(&self, client: &reqwest::Client) -> RequestBuilder {
+        client.post("https://api.curseforge.com/v1/mods/files")
+            .json(self.0)
+            .header("x-api-key", "$2a$10$YXf6dyJfJZM4zeChdr.RDOvWN.L48AN0dQShQO8/cVc5ho1wA8ZbS")
+    }
+
+    fn expires(&self) -> bool {
+        true
+    }
+
+    fn state(&self, states: &mut MetadataManagerStates) -> MetaLoadStateWrapper<Self::T> {
+        states.curseforge_get_files.entry(self.0.clone()).or_default().clone()
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self::T, MetaLoadError> {

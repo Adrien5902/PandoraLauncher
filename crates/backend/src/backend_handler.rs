@@ -498,7 +498,7 @@ impl BackendState {
                                                 params: neoforge_mod_params.clone()
                                             }).await
                                         },
-                                        ContentType::JavaModule => {
+                                        ContentType::JavaModule | ContentType::CurseforgeModpack { .. } | ContentType::Unknown => {
                                             meta.fetch(&ModrinthVersionUpdateMetadataItem {
                                                 sha1: hex::encode(summary.content_summary.hash).into(),
                                                 params: mod_params.clone()
@@ -1515,7 +1515,7 @@ impl BackendState {
             MessageToBackend::AddToSkinLibrary { source } => {
                 let (bytes, filename) = match source {
                     bridge::message::UrlOrFile::Url { url } => {
-                        let url = match reqwest::Url::parse(&*url) {
+                        let url = match url::Url::parse(&*url) {
                             Ok(url) => url,
                             Err(err) => {
                                 log::error!("Invalid URL: {}", err);
